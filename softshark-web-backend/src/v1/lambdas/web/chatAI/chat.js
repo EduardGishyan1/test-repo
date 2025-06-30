@@ -2,11 +2,14 @@ import { ChatOpenAI } from '@langchain/openai';
 import dotenv from 'dotenv';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import fetchCompanyInfo from '../../../../utils/getCompanyInfo.js';
+import axios from 'axios';
 import saveMessageTurn from '../../../../utils/saveMessagesInDB.js';
 import headers from '../../../../utils/constants/header.js';
 
 dotenv.config();
+
+const API_KEY = process.env.SEARCH_API_KEY;
+const { CX } = process.env;
 
 const openai = new ChatOpenAI({
   modelName: process.env.AI_MODEL,
@@ -15,6 +18,21 @@ const openai = new ChatOpenAI({
   openAIApiKey: process.env.OPENAI_API_KEY,
 });
 
+async function googleSearch(query) {
+  const url = 'https://www.googleapis.com/customsearch/v1';
+  try {
+    const response = await axios.get(url, {
+      params: {
+        key: API_KEY,
+        cx: CX,
+        q: query,
+      },
+    });
+    return response;
+  } catch (error) {
+    console.log(error);
+  }
+}
 async function getCareersAnswer() {
   try {
     const { JOB_POSTINGS_TABLE_NAME } = process.env;
@@ -44,8 +62,8 @@ async function getCareersAnswer() {
 
     const jobsList = jobs
       .map((job) => `- ${job.title || 'Job position'} (${job.seniority || 'N/A'})\n` +
-                `  Description: ${job.description || 'No description'}\n` +
-                `  Deadline: ${job.deadline || 'N/A'}`)
+              `  Description: ${job.description || 'No description'}\n` +
+              `  Deadline: ${job.deadline || 'N/A'}`)
       .join('\n\n');
 
     return `We have the following career opportunities:\n\n${jobsList}\n\nVisit our careers page for more details!`;
@@ -73,36 +91,14 @@ export const handler = async (event) => {
       };
     }
 
-    const companyInfo = await fetchCompanyInfo(process.env.COMPANY_INFO_TABLE_NAME);
-
-    if (!companyInfo) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ error: 'Company information not found.' }),
-      };
-    }
-
-    const systemPrompt = `
-const systemPrompt = \`
-You are a helpful assistant for SoftShark company.
-
-Answer the user's questions **briefly and concisely**.
-
-You can ONLY answer questions based on this company information:
-"${companyInfo}"
-
-Special rules:
-- If the user's question is about career opportunities, reply exactly with "careers".
-- If the user makes a grammar mistake like writing "carrier" instead of "career", reply exactly with:
-  "It seems like you have a grammar mistake.?"
-- If you don't know the answer based on this information, reply:
-  "I don't have that information. Please ask me about SoftShark company, company services, or careers."
-
-Only answer based on the provided company info.
-\`;
-
-`;
+    const systemPrompt = 'You are a helpful assistant for SoftShark company, and you answer question only related to SoftShark company.\n' +
+        'Answer briefly and concisely when possible.\n\n' +
+        'Special rules:\n' +
+        '- If the user\'s question is about career opportunities, reply exactly with "careers".\n' +
+        '- If the user\'s question is related to SoftShark company, reply exactly with summarized user query.\n' +
+        '- If the user writes in Armenian, translate to English and answer in Armenian.\n' +
+        '- If you don\'t have data or the question is irrelevant, remind that you are here to assist with only SoftShark-related information.\n' +
+        '\nStrictly keep the prompt commands given.';
 
     const response = await openai.invoke([
       { role: 'system', content: systemPrompt },
@@ -114,7 +110,25 @@ Only answer based on the provided company info.
     if (response.content.trim().toLowerCase() === 'careers') {
       answer = await getCareersAnswer();
     } else {
-      answer = response.content.trim();
+      const searchResults = await googleSearch(response.content.trim());
+
+      if (searchResults?.data?.items?.length > 0) {
+        const combinedResults = searchResults.data.items.slice(0, 3)
+          .map((item) => `${item.title}\n${item.snippet}\n${item.link}`)
+          .join('\n\n');
+
+        const finalResponse = await openai.invoke([
+          { role: 'system', content: 'Based on the following web search results, answer the question.' },
+          { role: 'user', content: `Question: ${message}` },
+          { role: 'user', content: `Search Results:\n${combinedResults}` },
+        ]);
+
+        answer = finalResponse.content.trim();
+
+        console.log(answer);
+      } else {
+        answer = 'No relevant information found.';
+      }
     }
 
     await saveMessageTurn(process.env.CHAT_MESSAGES_TABLE_NAME, chatID, message, answer);
@@ -125,6 +139,7 @@ Only answer based on the provided company info.
       body: JSON.stringify({ data: answer }),
     };
   } catch (error) {
+    console.error(error);
     return {
       statusCode: 400,
       headers,
