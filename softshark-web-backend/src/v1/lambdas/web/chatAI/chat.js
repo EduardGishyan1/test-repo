@@ -1,7 +1,7 @@
 import { ChatOpenAI } from '@langchain/openai';
 import dotenv from 'dotenv';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import axios from 'axios';
 import saveMessageTurn from '../../../../utils/saveMessagesInDB.js';
 import headers from '../../../../utils/constants/header.js';
@@ -22,11 +22,10 @@ async function googleSearch(query) {
   const url = 'https://www.googleapis.com/customsearch/v1';
   try {
     const response = await axios.get(url, {
-      params: { key: API_KEY, cx: CX, q: query },
+      params: { key: API_KEY, cx: CX, q: query, sort: 'date' },
     });
     return response;
   } catch (error) {
-    console.log(error);
     return null;
   }
 }
@@ -70,6 +69,54 @@ async function getCareersAnswer() {
   }
 }
 
+async function getChatHistory(chatID) {
+  try {
+    const { CHAT_MESSAGES_TABLE_NAME } = process.env;
+    const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
+    const ddbClient = new DynamoDBClient({ region: REGION });
+    const ddbDocClient = DynamoDBDocumentClient.from(ddbClient);
+
+    const params = {
+      TableName: CHAT_MESSAGES_TABLE_NAME,
+    };
+
+    const data = await ddbDocClient.send(new ScanCommand(params));
+    const items = data.Items || [];
+
+    const chatMessages = items
+      .filter((item) => item.chatID === chatID)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+      .map((item) => item.userMessage);
+
+    return chatMessages;
+  } catch (error) {
+    console.error('Error fetching chat history:', error);
+    return [];
+  }
+}
+
+async function summarizeChatHistory(chatHistory) {
+  if (!chatHistory || chatHistory.length === 0) return '';
+
+  const chatSummaryPrompt = `
+You are a helpful assistant for SoftShark company.
+
+Summarize the following chat history in a few sentences. Focus on what topics the user has asked about.
+
+Chat history:
+${chatHistory.map((msg, idx) => `${idx + 1}. ${msg}`).join('\n')}
+
+Summary:
+`;
+
+  const summaryResponse = await openai.invoke([
+    { role: 'system', content: 'You are a chat summarizer.' },
+    { role: 'user', content: chatSummaryPrompt },
+  ]);
+
+  return summaryResponse.content.trim();
+}
+
 export const handler = async (event) => {
   try {
     if (!event.body) {
@@ -81,8 +128,15 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Message is required' }) };
     }
 
+    const chatHistory = await getChatHistory(chatID);
+
+    const chatSummary = await summarizeChatHistory(chatHistory);
+
     const systemPrompt = `
 You are a helpful assistant for SoftShark company.
+
+Here is the summary of the previous conversation:
+${chatSummary}
 
 Rules:
 - If the user's question is about career opportunities, reply exactly with "careers".
@@ -103,22 +157,29 @@ Strictly follow these instructions.
 
     if (firstResponse.content.trim().toLowerCase() === 'careers') {
       answer = await getCareersAnswer();
+    } else if (
+      firstResponse.content.trim().toLowerCase().includes('not related') ||
+        firstResponse.content.trim().toLowerCase().includes('irrelevant')
+    ) {
+      answer = 'Please ask questions related to SoftShark or its career opportunities.';
+      return { statusCode: 200, headers, body: JSON.stringify({ data: answer }) };
     } else {
       const searchResults = await googleSearch(firstResponse.content.trim());
 
       let combinedResults = 'No search results found.';
       if (searchResults?.data?.items?.length > 0) {
-        combinedResults = searchResults.data.items.slice(0, 5)
+        combinedResults = searchResults.data.items
           .map((item) => `${item.title}\n${item.snippet}\n${item.link}`)
           .join('\n\n');
       }
-
       const finalResponse = await openai.invoke([
         { role: 'system', content: `
 You must answer the user's question using the provided Google search results below.
 
 You are not allowed to say "no information found." 
 You must always answer the question, even if you have to make the best use of limited information.
+
+Prioritize the newest information in the results.
 
 Provide the most helpful answer using the search results provided.
         ` },
