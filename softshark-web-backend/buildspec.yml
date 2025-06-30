@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+    commands:
+      - echo Installing Serverless...
+      - npm install --silent --no-progress -g npm
+      - npm install --silent --no-progress -g serverless@2.7.0
+
+  pre_build:
+    commands:
+      - echo Installing source npm dependencies...
+      - npm install --silent --no-progress
+
+  build:
+    commands:
+      - echo Running tests
+#      - npm run test
+      - echo Deployment stated on `date` for stage $STAGE
+      - export NODE_OPTIONS=--max_old_space_size=8000
+      - sls deploy -v --stage $STAGE
+
+  post_build:
+    commands:
+      - echo Deployment completed on this date `date`

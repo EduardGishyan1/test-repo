@@ -1,0 +1,743 @@
+service: softshark-web-backend
+
+plugins:
+  - serverless-offline # Run locally
+#  - serverless-esbuild
+
+package:
+  individually: true
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  # stage: ${opt:stage, self:custom.developerStage}
+  stage: ${opt:stage, 'dev'}
+  region: ${env:AWS_DEFAULT_REGION, 'us-east-1'}
+  tracing:
+    lambda: true
+  tags:
+    STAGE: ${self:provider.stage}
+  apiGateway:
+    restApiId: !Ref SoftSharkWebRestApi
+    restApiRootResourceId: !GetAtt SoftSharkWebRestApi.RootResourceId
+  iam:
+    role:
+      statements:
+        -
+          Effect: 'Allow'
+          Action:
+            - 'dynamodb:*'
+            - 's3:*'
+            - 'ses:*'
+            - 'ssm:GetParameter'
+          Resource: '*'
+custom:
+  esbuild:
+    minify: false
+  developerStage: ${env:DEVELOPER_IDENTIFIER,'local'}
+  resourceStage: dev
+  dynamoDB:
+    slugGSIName: slug-gsi
+    deletionPolicy:
+      production: 'Retain'
+      staging: 'Retain'
+      default: 'Delete'
+  exclude:
+    - aws-sdk
+
+resources:
+  Resources:
+    # DynamoDb
+    # Job postings table
+    eligibilityStoresDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: eligabable-stores-devrefactory-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'id'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'id'
+            KeyType: "HASH"
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+    JobPostingsDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      DeletionPolicy: ${self:custom.dynamoDB.deletionPolicy.${self:provider.stage}, self:custom.dynamoDB.deletionPolicy.default}
+      Properties:
+        TableName: ${self:service}-job-postings-dynamodb-table-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'id'
+            AttributeType: 'S'
+          - AttributeName: 'type'
+            AttributeType: 'S'
+          - AttributeName: 'slug'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'type'
+            KeyType: "HASH"
+          - AttributeName: 'id'
+            KeyType: "RANGE"
+        GlobalSecondaryIndexes:
+          - IndexName: ${self:custom.dynamoDB.slugGSIName}
+            KeySchema:
+              - AttributeName: slug
+                KeyType: HASH
+            Projection:
+              ProjectionType: 'ALL'
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+    BlogPostsDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      DeletionPolicy: ${self:custom.dynamoDB.deletionPolicy.${self:provider.stage}, self:custom.dynamoDB.deletionPolicy.default}
+      Properties:
+        TableName: ${self:service}-blog-posts-dynamodb-table-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'id'
+            AttributeType: 'S'
+          - AttributeName: 'type'
+            AttributeType: 'S'
+          - AttributeName: 'slug'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'type'
+            KeyType: "HASH"
+          - AttributeName: 'id'
+            KeyType: "RANGE"
+        GlobalSecondaryIndexes:
+          - IndexName: slug-index
+            KeySchema:
+              - AttributeName: slug
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+    MessagesDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      DeletionPolicy: ${self:custom.dynamoDB.deletionPolicy.${self:provider.stage}, self:custom.dynamoDB.deletionPolicy.default}
+      Properties:
+        TableName: ${self:service}-messages-dynamodb-table-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'id'
+            AttributeType: 'S'
+          - AttributeName: 'type'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'type'
+            KeyType: "HASH"
+          - AttributeName: 'id'
+            KeyType: "RANGE"
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+    # Apply job table
+    JobApplicationDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      DeletionPolicy: ${self:custom.dynamoDB.deletionPolicy.${self:provider.stage}, self:custom.dynamoDB.deletionPolicy.default}
+      Properties:
+        TableName: ${self:service}-job-application-dynamodb-table-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'id'
+            AttributeType: 'S'
+          - AttributeName: 'type'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'type'
+            KeyType: "HASH"
+          - AttributeName: 'id'
+            KeyType: "RANGE"
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+
+    CompanyInfoDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      DeletionPolicy: ${self:custom.dynamoDB.deletionPolicy.${self:provider.stage}, self:custom.dynamoDB.deletionPolicy.default}
+      Properties:
+        TableName: ${self:service}-about-company-dynamodb-table-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'id'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'id'
+            KeyType: "HASH"
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+
+    ChatMessagesDynamoDBTable:
+      Type: AWS::DynamoDB::Table
+      DeletionPolicy: ${self:custom.dynamoDB.deletionPolicy.${self:provider.stage}, self:custom.dynamoDB.deletionPolicy.default}
+      Properties:
+        TableName: ${self:service}-chat-history-messages-dynamodb-table-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: 'chatId'
+            AttributeType: 'S'
+          - AttributeName: 'timestamp'
+            AttributeType: 'S'
+        KeySchema:
+          - AttributeName: 'chatId'
+            KeyType: 'HASH'
+          - AttributeName: 'timestamp'
+            KeyType: 'RANGE'
+        BillingMode: 'PAY_PER_REQUEST'
+        Tags:
+          - Key: STAGE
+            Value: ${self:provider.stage}
+
+      # ApiGateway
+    SoftSharkWebRestApi:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: ${self:service}-rest-api-${self:provider.stage}
+    ApiGatewayAuthorizer:
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: softshark-admin-authorizer-${self:custom.resourceStage}
+        IdentitySource: method.request.header.Authorization
+        RestApiId: !Ref SoftSharkWebRestApi
+        Type: COGNITO_USER_POOLS
+        ProviderARNs:
+          - !GetAtt AdminDashboardUserPool.Arn
+    GatewayResponseUnauthorized:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Credentials: "'true'"
+        ResponseType: UNAUTHORIZED
+        RestApiId: !Ref SoftSharkWebRestApi
+    # Cognito
+    AdminDashboardUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: softshark-admin-user-pool-${self:provider.stage}
+        UsernameAttributes:
+          - email
+    AdminDashboardUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: softshark-admin-user-pool-client-${self:provider.stage}
+        UserPoolId: !Ref AdminDashboardUserPool
+        ExplicitAuthFlows:
+          - ALLOW_REFRESH_TOKEN_AUTH
+          - ALLOW_USER_SRP_AUTH
+        GenerateSecret: false
+        SupportedIdentityProviders:
+          - COGNITO
+    # S3
+    AdminAssetsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: softshark-admin-assets-${self:provider.stage}
+        #AccessControl: PublicRead
+  Outputs:
+    JobPostingsDynamoDBTableName:
+      Value: !Ref JobPostingsDynamoDBTable
+      Export:
+        Name: ${self:provider.stage}-${self:service}-external-job-postings-table-name
+    BlogPostsDynamoDBTableName:
+      Value: !Ref BlogPostsDynamoDBTable
+      Export:
+        Name: ${self:provider.stage}-${self:service}-external-blog-posts-table-name
+    MessagesDynamoDBTableName:
+      Value: !Ref JobPostingsDynamoDBTable
+      Export:
+        Name: ${self:provider.stage}-${self:service}-external-messages-table-name
+    AdminDashboardUserPoolId:
+      Value: !Ref AdminDashboardUserPool
+      Export:
+        Name: softshark-admin-dashboard-user-pool-id-${self:provider.stage}
+    AdminDashboardUserPoolClientId:
+      Value: !Ref AdminDashboardUserPoolClient
+      Export:
+        Name: softshark-admin-dashboard-user-pool-client-id-${self:provider.stage}
+    AdminAssetsBucket:
+      Value: !Ref AdminAssetsBucket
+      Export:
+        Name: softshark-admin-assets-bucket-${self:provider.stage}
+functions:
+  # Admin
+  # Job postings
+  createJobPosting:
+    handler: src/v1/lambdas/admin/jobPostings/createJobPosting.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/job-postings
+          method: post
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getJobPostings:
+    handler: src/v1/lambdas/admin/jobPostings/getJobPostings.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+    events:
+      - http:
+          path: v1/job-postings
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getWebJobPostings:
+    handler: src/v1/lambdas/web/getJobPostings.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+    events:
+      - http:
+          path: v1/web/jobPostings
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getJobPosting:
+    handler: src/v1/lambdas/admin/jobPostings/getJobPosting.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+    events:
+      - http:
+          path: v1/job-postings/{id}
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getJobPostingBySlug:
+    handler: src/v1/lambdas/web/getJobPostingBySlug.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+      GSI_NAME: ${self:custom.dynamoDB.slugGSIName}
+    events:
+      - http:
+          path: v1/web/jobPostingsBySlug/{slug}
+          method: get
+          request:
+            parameters:
+              paths:
+                slug: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  deleteJobPosting:
+    handler: src/v1/lambdas/admin/jobPostings/deleteJobPosting.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/job-postings/{id}
+          method: delete
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  updateJobPosting:
+    handler: src/v1/lambdas/admin/jobPostings/updateJobPosting.handler
+    environment:
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/job-postings/{id}
+          method: patch
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  # assets
+  generateImageUploadUrl:
+    handler: src/v1/lambdas/admin/assets/generateImageUploadUrl.handler
+    environment:
+      ASSETS_BUCKET: !Ref AdminAssetsBucket
+    events:
+      - http:
+          path: v1/admin/assets/get-image-upload-url
+          method: get
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getImages:
+    handler: src/v1/lambdas/admin/assets/getImages.handler
+    environment:
+      ASSETS_BUCKET: !Ref AdminAssetsBucket
+      ASSETS_BUCKET_IMAGES_FOLDER: images
+    events:
+      - http:
+          path: v1/admin/assets/get-images
+          method: get
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  deleteImage:
+    handler: src/v1/lambdas/admin/assets/deleteImage.handler
+    environment:
+      ASSETS_BUCKET: !Ref AdminAssetsBucket
+      ASSETS_BUCKET_IMAGES_FOLDER: images
+    events:
+      - http:
+          path: v1/admin/assets/deleteImage/{key}
+          method: delete
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                key: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  #Blog posts
+  createBlogPost:
+    handler: src/v1/lambdas/admin/blogPosts/createBlogPost.handler
+    environment:
+      BLOG_POSTS_TABLE_NAME: !Ref BlogPostsDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/blog-posts
+          method: post
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  deleteBlogPost:
+    handler: src/v1/lambdas/admin/blogPosts/deleteBlogPost.handler
+    environment:
+      BLOG_POSTS_TABLE_NAME: !Ref BlogPostsDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/blog-posts/{id}
+          method: delete
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getBlogPosts:
+    handler: src/v1/lambdas/admin/blogPosts/getBlogPosts.handler
+    environment:
+      BLOG_POSTS_TABLE_NAME: !Ref BlogPostsDynamoDBTable
+    events:
+      - http:
+          path: v1/blog-posts
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getBlogPost:
+    handler: src/v1/lambdas/admin/blogPosts/getBlogPost.handler
+    environment:
+      BLOG_POSTS_TABLE_NAME: !Ref BlogPostsDynamoDBTable
+    events:
+      - http:
+          path: v1/blog-posts/{id}
+          method: get
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getBlogPostBySlug:
+    handler: src/v1/lambdas/admin/blogPosts/getBlogPostBySlug.handler
+    environment:
+      BLOG_POSTS_TABLE_NAME: !Ref BlogPostsDynamoDBTable
+    events:
+      - http:
+          path: v1/blogposts/{slug}
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  updateBlogPost:
+    handler: src/v1/lambdas/admin/blogPosts/updateBlogPost.handler
+    environment:
+      BLOG_POSTS_TABLE_NAME: !Ref BlogPostsDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/blog-posts/{id}
+          method: post
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  # Apply to job
+  applyToJob:
+    handler: src/v1/lambdas/web/applyToJob.handler
+    environment:
+      SOFTSHARK_WEB_SEND_EMAIL_TO: ${ssm:/SOFTSHARK_WEB_SEND_EMAIL_TO}
+      SOFTSHARK_WEB_SEND_EMAIL_FROM: ${ssm:/SOFTSHARK_WEB_SEND_EMAIL_FROM}
+    events:
+      - http:
+          path: v1/web/applyTojob
+          method: POST
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  # Send message
+  sendMessage:
+    handler: src/v1/lambdas/web/sendMessage.handler
+    environment:
+      SOFTSHARK_WEB_SEND_EMAIL_TO: ${ssm:/SOFTSHARK_WEB_SEND_EMAIL_TO}
+      SOFTSHARK_WEB_SEND_EMAIL_FROM: ${ssm:/SOFTSHARK_WEB_SEND_EMAIL_FROM}
+    events:
+      - http:
+          path: v1/web/sendMessage
+          method: POST
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  # Response message
+  createMessage:
+    handler: src/v1/lambdas/web/createMessage.handler
+    environment:
+      MESSAGES_TABLE_NAME: !Ref MessagesDynamoDBTable
+    events:
+      - http:
+          path: v1/web/messages
+          method: post
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getMessages:
+    handler: src/v1/lambdas/admin/messages/getMessages.handler
+    environment:
+      MESSAGES_TABLE_NAME: !Ref MessagesDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/messages
+          method: get
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  sendResponseMessage:
+    handler: src/v1/lambdas/admin/messages/sendMessage.handler
+    environment:
+      SOFTSHARK_WEB_SEND_EMAIL_FROM: ${ssm:/SOFTSHARK_WEB_SEND_EMAIL_FROM}
+      SOFTSHARK_WEB_SEND_EMAIL_TO: ${ssm:/SOFTSHARK_WEB_SEND_EMAIL_TO}
+    events:
+      - http:
+          path: v1/admin/messages
+          method: POST
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  deleteMessage:
+    handler: src/v1/lambdas/admin/messages/deleteMessage.handler
+    environment:
+      MESSAGES_TABLE_NAME: !Ref MessagesDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/messages/{id}
+          method: delete
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+
+  updateMessage:
+    handler: src/v1/lambdas/admin/messages/updateMessage.handler
+    environment:
+      MESSAGES_TABLE_NAME: !Ref MessagesDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/messages/v1/admin/messages/{id}
+          method: patch
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          request:
+            parameters:
+              paths:
+                id: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  # Job Application
+  createJobApplication:
+    handler: src/v1/lambdas/web/createJobApplication.handler
+    environment:
+      APPLY_JOB_TABLE_NAME: !Ref JobApplicationDynamoDBTable
+    events:
+      - http:
+          path: v1/web/jobApplication
+          method: post
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  getJobApplications:
+    handler: src/v1/lambdas/admin/jobApplications/getJobApplications.handler
+    environment:
+      JOB_APPLICATIONS_TABLE_NAME: !Ref JobApplicationDynamoDBTable
+    events:
+      - http:
+          path: v1/admin/jobApplications
+          method: get
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+  syncContents:
+    handler: src/v1/lambdas/web/RevRefactory/syncCSVContent.handler
+    timeout: 300
+    environment:
+      S3_BUCKET_NAME: 'softshark-public-assets'
+      STORES_FILE_NAME: 'DEVREFACTORY-stores.xlsx'
+  checkEligibility:
+    handler: src/v1/lambdas/web/RevRefactory/eligibilityCheck.handler
+    events:
+      - http:
+          path: v1/devrefactory/eligible/{store}
+          method: get
+          request:
+            parameters:
+              paths:
+                store: true
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+
+  chatAI:
+    handler: src/v1/lambdas/web/chatAI/chat.handler
+    environment:
+      CHAT_MESSAGES_TABLE_NAME: !Ref ChatMessagesDynamoDBTable
+      JOB_POSTINGS_TABLE_NAME: !Ref JobPostingsDynamoDBTable
+      OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+      COMPANY_INFO_TABLE_NAME: !Ref CompanyInfoDynamoDBTable
+    events:
+      - http:
+          path: v1/AIchat
+          method: post
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+
+  postCompanyInfo:
+      handler: src/v1/lambdas/admin/companyInfo/addInfo.handler
+      environment:
+        COMPANY_INFO_TABLE_NAME: !Ref CompanyInfoDynamoDBTable
+      events:
+        - http:
+            path: v1/company-info
+            method: post
+#            authorizer:
+#              type: COGNITO_USER_POOLS
+#              authorizerId: !Ref ApiGatewayAuthorizer
+            cors:
+              origin: '*'
+              headers:
+                - '*'
+
+  chatHistory:
+    handler: src/v1/lambdas/admin/chat/chatHistory.handler
+    environment:
+      CHAT_MESSAGES_TABLE_NAME: !Ref ChatMessagesDynamoDBTable
+    events:
+      - http:
+          path: v1/chat-history
+          method: get
+#          authorizer:
+#            type: COGNITO_USER_POOLS
+#            authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'
+
+  getCompanyInfo:
+    handler: src/v1/lambdas/admin/chat/companyInfo.handler
+    environment:
+      COMPANY_INFO_TABLE_NAME: !Ref CompanyInfoDynamoDBTable
+    events:
+      - http:
+          path: v1/company-info
+          method: get
+          # authorizer:
+          # type: COGNITO_USER_POOLS
+          # authorizerId: !Ref ApiGatewayAuthorizer
+          cors:
+            origin: '*'
+            headers:
+              - '*'

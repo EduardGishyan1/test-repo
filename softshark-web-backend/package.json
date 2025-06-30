@@ -1,0 +1,44 @@
+{
+  "name": "softshark-web-backend",
+  "version": "1.0.0",
+  "description": "Serverless template",
+  "type": "module",
+  "main": "handler.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "author": "Karlen Mkrtchyan",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.369.0",
+    "@aws-sdk/client-ses": "^3.369.0",
+    "@aws-sdk/lib-dynamodb": "^3.835.0",
+    "@langchain/core": "^0.3.61",
+    "@langchain/openai": "^0.5.15",
+    "dotenv": "^16.5.0",
+    "joi": "^17.4.0",
+    "mimemessage": "^1.0.5",
+    "pino": "^6.11.0",
+    "uuid": "^8.3.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.369.0",
+    "@aws-sdk/s3-request-presigner": "^3.370.0",
+    "@aws-sdk/util-dynamodb": "^3.369.0",
+    "@babel/preset-env": "^7.11.5",
+    "@types/jest": "^26.0.13",
+    "babel-jest": "^30.0.2",
+    "eslint": "^7.8.1",
+    "eslint-config-airbnb-base": "^14.2.0",
+    "eslint-config-prettier": "^6.11.0",
+    "eslint-plugin-import": "^2.22.0",
+    "eslint-plugin-prettier": "^3.1.4",
+    "husky": "^4.3.0",
+    "jest": "^30.0.3",
+    "prettier": "^2.1.1",
+    "serverless": "^4.17.1",
+    "serverless-esbuild": "^1.45.1",
+    "serverless-offline": "^14.4.0"
+  }
+}
