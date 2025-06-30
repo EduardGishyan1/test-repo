@@ -22,17 +22,15 @@ async function googleSearch(query) {
   const url = 'https://www.googleapis.com/customsearch/v1';
   try {
     const response = await axios.get(url, {
-      params: {
-        key: API_KEY,
-        cx: CX,
-        q: query,
-      },
+      params: { key: API_KEY, cx: CX, q: query },
     });
     return response;
   } catch (error) {
     console.log(error);
+    return null;
   }
 }
+
 async function getCareersAnswer() {
   try {
     const { JOB_POSTINGS_TABLE_NAME } = process.env;
@@ -62,8 +60,8 @@ async function getCareersAnswer() {
 
     const jobsList = jobs
       .map((job) => `- ${job.title || 'Job position'} (${job.seniority || 'N/A'})\n` +
-              `  Description: ${job.description || 'No description'}\n` +
-              `  Deadline: ${job.deadline || 'N/A'}`)
+            `  Description: ${job.description || 'No description'}\n` +
+            `  Deadline: ${job.deadline || 'N/A'}`)
       .join('\n\n');
 
     return `We have the following career opportunities:\n\n${jobsList}\n\nVisit our careers page for more details!`;
@@ -75,75 +73,67 @@ async function getCareersAnswer() {
 export const handler = async (event) => {
   try {
     if (!event.body) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: 'Message is required' }),
-      };
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Message is required' }) };
     }
 
     const { message, chatID } = JSON.parse(event.body);
     if (!message) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: 'Message is required' }),
-      };
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Message is required' }) };
     }
 
-    const systemPrompt = 'You are a helpful assistant for SoftShark company, and you answer question only related to SoftShark company.\n' +
-        'Answer briefly and concisely when possible.\n\n' +
-        'Special rules:\n' +
-        '- If the user\'s question is about career opportunities, reply exactly with "careers".\n' +
-        '- If the user\'s question is related to SoftShark company, reply exactly with summarized user query.\n' +
-        '- If the user writes in Armenian, translate to English and answer in Armenian.\n' +
-        '- If you don\'t have data or the question is irrelevant, remind that you are here to assist with only SoftShark-related information.\n' +
-        '\nStrictly keep the prompt commands given.';
+    const systemPrompt = `
+You are a helpful assistant for SoftShark company.
 
-    const response = await openai.invoke([
+Rules:
+- If the user's question is about career opportunities, reply exactly with "careers".
+- If the user's question is written in Armenian, translate it to English, answer in Armenian.
+- You must always answer the user's question using the provided search results.
+- Never skip a question.
+- Always provide the best possible answer using all available information.
+
+Strictly follow these instructions.
+    `;
+
+    const firstResponse = await openai.invoke([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: message },
     ]);
 
     let answer;
 
-    if (response.content.trim().toLowerCase() === 'careers') {
+    if (firstResponse.content.trim().toLowerCase() === 'careers') {
       answer = await getCareersAnswer();
     } else {
-      const searchResults = await googleSearch(response.content.trim());
+      const searchResults = await googleSearch(firstResponse.content.trim());
 
+      let combinedResults = 'No search results found.';
       if (searchResults?.data?.items?.length > 0) {
-        const combinedResults = searchResults.data.items.slice(0, 3)
+        combinedResults = searchResults.data.items.slice(0, 5)
           .map((item) => `${item.title}\n${item.snippet}\n${item.link}`)
           .join('\n\n');
-
-        const finalResponse = await openai.invoke([
-          { role: 'system', content: 'Based on the following web search results, answer the question.' },
-          { role: 'user', content: `Question: ${message}` },
-          { role: 'user', content: `Search Results:\n${combinedResults}` },
-        ]);
-
-        answer = finalResponse.content.trim();
-
-        console.log(answer);
-      } else {
-        answer = 'No relevant information found.';
       }
+
+      const finalResponse = await openai.invoke([
+        { role: 'system', content: `
+You must answer the user's question using the provided Google search results below.
+
+You are not allowed to say "no information found." 
+You must always answer the question, even if you have to make the best use of limited information.
+
+Provide the most helpful answer using the search results provided.
+        ` },
+        { role: 'user', content: `User question: ${message}` },
+        { role: 'user', content: `Google search results:\n${combinedResults}` },
+      ]);
+
+      answer = finalResponse.content.trim();
     }
 
     await saveMessageTurn(process.env.CHAT_MESSAGES_TABLE_NAME, chatID, message, answer);
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ data: answer }),
-    };
+    return { statusCode: 200, headers, body: JSON.stringify({ data: answer }) };
   } catch (error) {
     console.error(error);
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ error: error.message }),
-    };
+    return { statusCode: 400, headers, body: JSON.stringify({ error: error.message }) };
   }
 };
